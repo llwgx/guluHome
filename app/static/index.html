@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>温湿度监控</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="/static/chart.umd.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
@@ -375,12 +375,20 @@
     const PAGE_PASSWORD = "gulu";
     const AUTH_KEY = "dashboard_auth";
 
+    let refreshTimer = null;
+
+    function startAutoRefresh() {
+      if (refreshTimer) return;
+      refreshTimer = setInterval(refresh, 30_000);
+    }
+
     function unlockPage() {
       document.getElementById("login-gate").classList.add("hidden");
       document.getElementById("app").classList.remove("hidden");
       document.body.classList.add("authenticated");
       sessionStorage.setItem(AUTH_KEY, "1");
       refresh();
+      startAutoRefresh();
     }
 
     function tryLogin() {
@@ -479,6 +487,7 @@
 
     async function loadLatest() {
       const res = await fetch("/api/latest");
+      if (!res.ok) throw new Error(`latest API ${res.status}`);
       const data = await res.json();
       for (const s of data.sensors) {
         const slot = document.getElementById(CARD_SLOTS[s.sensor_no]);
@@ -552,20 +561,42 @@
     }
 
     async function loadCharts() {
+      if (typeof Chart === "undefined") {
+        throw new Error("Chart.js 未加载");
+      }
       for (const sensorNo of [1, 2]) {
         const res = await fetch(chartQuery(sensorNo));
+        if (!res.ok) throw new Error(`chart API ${res.status}`);
         const data = await res.json();
         buildChart(`chart${sensorNo}`, sensorNo, data);
       }
     }
 
     async function refresh() {
+      const status = document.getElementById("status");
+      let latestOk = false;
+      let chartsOk = false;
+
       try {
-        await Promise.all([loadLatest(), loadCharts()]);
-        document.getElementById("status").textContent =
-          `最后刷新: ${new Date().toLocaleString("zh-CN")}`;
+        await loadLatest();
+        latestOk = true;
       } catch {
-        document.getElementById("status").textContent = "加载失败，请检查服务是否运行";
+        status.textContent = "读数加载失败，请检查服务是否运行";
+      }
+
+      try {
+        await loadCharts();
+        chartsOk = true;
+      } catch {
+        if (latestOk) {
+          status.textContent = "读数已更新，图表加载失败";
+        } else if (!status.textContent.includes("读数")) {
+          status.textContent = "加载失败，请检查服务是否运行";
+        }
+      }
+
+      if (latestOk && chartsOk) {
+        status.textContent = `最后刷新: ${new Date().toLocaleString("zh-CN")}`;
       }
     }
 
@@ -580,6 +611,7 @@
 
     if (sessionStorage.getItem(AUTH_KEY) === "1") {
       refresh();
+      startAutoRefresh();
     }
 
     let resizeTimer;
